@@ -1,0 +1,799 @@
+---
+title: "Thesis - part 1 exploratory"
+author: "Thomas Lieber"
+date: "24-3-2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+
+```
+
+#Library
+```{r}
+library("Amelia")
+library("cowplot")
+library("dtw")
+#library("forecast")
+library("ggplot2")
+library("imputeTS")
+library("openxlsx")
+library('RColorBrewer')
+library("readxl")
+library("reshape2")
+```
+
+#Data importing hourly data
+```{r}
+#working directory
+setwd("D:/master/Thesis/data")
+
+#hourly data
+temp1 = read.xlsx("Temperature_1.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+temp2 = read.xlsx("Temperature_2.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+temp3 = read.xlsx("Temperature_3.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+
+#monthly data
+monthly_raw = read.xlsx("Temperature_monthly.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+```
+
+#Data cleaning part 1
+```{r}
+temp_raw = rbind(temp1, temp2, temp3) #put all datasets together in one dataset
+#set all -9999 to NA
+ind_9999s = which(temp_raw == "-9999", arr.ind = T)
+temp_raw[ind_9999s] = NA
+
+#limit the dataset between 1853 January and 1963 December
+ind_interval_years = which(temp_raw$YYYY > 1852 & temp_raw$YYYY < 1964)
+temp_raw = temp_raw[ind_interval_years,]
+
+#delete variables with the same info
+temp_raw = temp_raw[,-which(colnames(temp_raw) %in% c("TA", "PA"))]
+
+#change variable names to make them more understandable
+new_names = c("temp", "airpressure", "wind_dir", "windforce", "windspeed")
+colnames(temp_raw)[5:9] = new_names
+```
+
+#Missing per unique month
+```{r}
+months = as.character(temp_raw$M)
+years_months = as.numeric(paste(temp_raw$YYYY, months, sep = ""))
+temp_raw = cbind(years_months, temp_raw)
+
+uniq_months = unique(years_months)
+M = length(uniq_months)
+missings_pm = matrix(0, M, 2)
+
+#find the amount of missing values per month for air pressure and temperature.
+for(i in 1:M){
+  month_indice = which(temp_raw$years_months == uniq_months[i])
+  month_ap = temp_raw$airpressure[month_indice]
+  month_temp = temp_raw$temp[month_indice]
+
+  missings_pm[i,1] = sum(is.na(month_ap))
+  missings_pm[i,2] = sum(is.na(month_temp))
+}
+
+
+years_months_missing = which(missings_pm > 0)
+```
+
+#10th and 90th quantiles per month for temperature and air pressure
+```{r}
+var_names = c("temp", "airpressure")
+
+CIs_m = matrix(0, 12, 4)
+
+for(i in 1:12){
+  month = temp_raw[which(temp_raw$M == i),]
+  for(j in 1:2){
+    variable = month[,var_names[j]]
+    
+    if(j == 1){
+      CIs_m[i,1:2] = quantile(variable, probs = c(0.1, 0.9), na.rm = T, type = 8)
+    }
+    if(j == 2){
+      CIs_m[i,3:4] = quantile(variable, probs = c(0.1, 0.9), na.rm = T, type = 8)
+    }
+  }
+}
+```
+
+#Hours of and 90th percentile of temp and airpressure variables
+```{r}
+#Initialize matrix for temperature and air pressure variables.
+feat_names = c("temp_min_hours",
+                     "temp_max_hours", 
+                     "temp_min", 
+                     "temp_max", 
+                     "temp_mean", 
+                     "temp_sd", 
+                     "airP_min_hours", 
+                     "airP_max_hours", 
+                     "airP_min", 
+                     "airP_max",  
+                     "airP_mean", 
+                     "airP_sd")
+
+feature_vars = matrix(0, length(uniq_months), length(feat_names))
+colnames(feature_vars) = feat_names
+
+#for every month per variable calculate summary measures 
+for(i in 1:length(uniq_months)){
+
+  month = temp_raw[which(temp_raw$years_months == uniq_months[i]),]
+  M = month$M[1]
+
+  for(j in 1:2){
+    #j is air pressure or temperature.
+    variable = month[,var_names[j]]
+
+    if(j == 1){
+      feature_vars[i,1] = length(variable[variable < CIs_m[M,1]])
+      feature_vars[i,2] = length(variable[variable > CIs_m[M,2]])
+      feature_vars[i,3] = min(variable, na.rm = T)
+      feature_vars[i,4] = max(variable, na.rm = T)
+      feature_vars[i,5] = mean(variable, na.rm = T)
+      feature_vars[i,6] = sd(variable, na.rm = T)
+      
+    }
+    if(j == 2){
+      feature_vars[i,7] = length(variable[variable < CIs_m[M,3]])
+      feature_vars[i,8] = length(variable[variable > CIs_m[M,4]])
+      feature_vars[i,9] = min(variable, na.rm = T)
+      feature_vars[i,10] = max(variable, na.rm = T)
+      feature_vars[i,11] = mean(variable, na.rm = T)
+      feature_vars[i,12] = sd(variable, na.rm = T)
+    }
+  }
+}
+
+
+airp_missing = which(missings_pm[,1] > 0)
+temp_missing = which(missings_pm[,2] > 0)
+
+feature_vars[airp_missing, (7:12)] = NA
+feature_vars[temp_missing, (1:6)] = NA
+
+feature_vars = as.data.frame(feature_vars)
+
+length(unique(c(airp_missing, temp_missing))) #amount of months missing
+
+is.inf <- function(x){
+  x == Inf | x == -Inf
+}
+
+#no inf
+colSums(apply(feature_vars, 2, is.inf), na.rm = T)
+```
+
+#Dry categorical
+```{r}
+#Find the unique values of the wind description variables.
+values = unique(temp_raw$W1)
+#find all characters which has the "droo" in it.
+ind_droo = grepl("droo", values)
+#select all values with "droo" in it
+droog_values = values[ind_droo]
+#Index of all values that do not refer to a dry weather description
+not_droog = c(2,9,12,18,19,23:28,30,32,35,36,37,39,43,44,49,51,52,53,57)
+#deselect all values that do not refer to a dry weather description
+droog_values2 = droog_values[-not_droog]
+
+#Set all missing values to NA and all droog values to 1
+w1 = temp_raw$W1
+na_ind = which(is.na(w1))
+droog = (w1 %in% droog_values2) * 1
+droog[na_ind] = NA
+```
+
+#Total dry hours per month
+```{r}
+droog_total = numeric(length(uniq_months))
+#for every month calculate the sum of dry values
+for(i in 1:length(uniq_months)){
+  droog_total[i] = sum(droog[which(temp_raw$years_months == uniq_months[i])])
+}
+```
+
+#Streak detect
+```{r}
+#function cacluates the maximum amount of 1 values in a row for a variable.
+streak <- function(x){
+  run = rle(x)
+  ind = which(run$values == 1)
+  return(max(run$lengths[ind]))
+}
+```
+
+#Dry streak
+```{r}
+#calculate the maximum streak of dry hours per variable.
+dry_streak = numeric(length(uniq_months))
+
+for(i in 1:length(uniq_months)){
+  dry_streak[i] = streak(droog[which(temp_raw$years_months == uniq_months[i])])
+}
+
+dry_streak[dry_streak == -Inf] = NA
+```
+
+#Wind direction
+```{r}
+#For every wind direction, calculate the amount of hours per month and save it into a variable.
+direction_names = rownames(table(temp_raw$wind_dir))
+w_direction_matrix = matrix(0, nrow = length(uniq_months), length(direction_names))
+colnames(w_direction_matrix) = direction_names
+count = 0
+
+for(i in 1:length(uniq_months)){
+  for(j in 1:length(direction_names)){
+    month = temp_raw$wind_dir[which(temp_raw$years_months == uniq_months[i])]
+    if(sum(is.na(month)) > 0){
+      w_direction_matrix[i,] = NA
+    }
+    if(sum(is.na(month)) == 0){
+      w_direction_matrix[i,direction_names[j]] = table(month)[direction_names[j]]
+       if(!(direction_names[j] %in% month)){
+          w_direction_matrix[i,direction_names[j]] = 0
+        }
+    }
+  }
+}
+```
+
+#Windforce
+```{r}
+#Split windforce into 3 categories: low, medium and high. Then, calculate per month the amount of hours per windforce category and save it into a variable.
+wf = temp_raw$windforce
+low_wf = c("stil", "bijna stil", "slappe koelte", "zacht", "zwak")
+med_wf = c("matige koelte", "matig")
+high_wf =  unique(wf)[!(unique(wf) %in% c(low_wf, med_wf))]
+
+wf_matrix = matrix(0, length(uniq_months), 3)
+wf_names = c("low_wf", "med_wf", "high_wf")
+colnames(wf_matrix) = wf_names
+
+for(i in 1:length(uniq_months)){
+  month = wf[which(temp_raw$years_months == uniq_months[i])]
+  
+  wf_matrix[i,1] = sum(month %in% low_wf)
+  wf_matrix[i,2] = sum(month %in% med_wf)
+  wf_matrix[i,3] = sum(month %in% high_wf)
+  if(sum(is.na(month)) > 0){
+    wf_matrix[i,] = NA
+  }
+}
+```
+
+#Feature engineered variables together
+```{r}
+#put all the feature engineered variables together.
+new_y_m = matrix(NA, length(uniq_months), 2)
+for(i in 1:length(uniq_months)){
+  row = as.character(uniq_months[i])
+  splitup = strsplit(row, "")
+  new_y_m[i,1] = paste(splitup[[1]][1:4], sep = "", collapse = "")
+  new_y_m[i,2] = paste(splitup[[1]][5:length(splitup[[1]])], sep = "", collapse = "")
+}
+
+
+feature_vars_all = data.frame(years_months = as.numeric(uniq_months),
+                              year = as.numeric(new_y_m[,1]), 
+                              month = as.numeric(new_y_m[,2]), 
+                              feature_vars, 
+                              dry_total = droog_total, 
+                              dry_streak = dry_streak, 
+                              w_direction_matrix, 
+                              wf_matrix)
+```
+
+#Summary stats
+```{r}
+#For every variable, calcuate summary statistics and save it into table format for Latex.
+summary_function_num <- function(column){
+  #places various summary measure (mean, sd etc) of numeric variables into a vector
+  rown = c("min", "max", "mean", "sd",  "median", "NA %")
+  vec = numeric(length(rown))
+  names(vec) = rown
+  vec[1] = min(column, na.rm = TRUE)
+  vec[2] = max(column, na.rm = TRUE)
+  vec[3] = mean(column, na.rm = TRUE)
+  vec[4] = sd(column, na.rm = TRUE)
+  vec[5] = median(column, na.rm = TRUE)
+  vec[6] = sum(is.na(column)) / length(column) * 100
+  vec = round(vec,2)
+  return(vec)
+}
+
+titles = c("Hours >10th percentile temperature",
+           "Hours <90th percentile temperature",
+           "Min. temperature",
+           "Max. temperature",
+           "Mean temperature",
+           "Std. temperature ",
+           "Hours >10th percentile air pressure",
+           "Hours <90th percentile air pressure",
+           "Min. air pressure",
+           "Max. air pressure",
+           "Mean air pressure",
+           "Std. air pressure",
+           "Dry hours",
+           "Max. streak dry hours",
+           "Hours of north wind",
+           "Hours of north-east wind",
+           "Hours of north-west wind",
+           "Hours of east wind",
+           "Hours of west wind",
+           "Hours of south wind",
+           "Hours of south-east wind",
+           "Hours of south-west wind",
+           "Hours of low windspeed",
+           "Hours of medium windspeed",
+           "Hours of high windspeed")
+
+
+y_labs = character(25)
+y_labs[c(1:2,7:8,13:25)] = "Hours"
+y_labs[3:6] = "Temp. Celcius"
+y_labs[9:12] = "hPa"
+
+df = apply(feature_vars_all[,-(1:3)], 2, summary_function_num)
+df[6,] = paste(df[6,], "%", sep = "")
+
+df2 = data.frame(colnames(df), t(df))
+names_df2 = c("Variable name", 'Unit of measure', "Min.", "Max.", "Mean", "Sd", "Median", "NA %")
+
+latex_line <- function(row){
+  latex_row = paste(as.character(row), collapse = "&")
+  add = " \\\ hline"
+  latex_row = paste(latex_row, add)
+  return(latex_row)
+}
+
+df3 = rbind(names_df2,  cbind(df2[,1], cbind(y_labs, df2[,2:7])))
+
+df3[-1,1] = titles
+
+output_latex = apply(df3, 1, latex_line)
+#write.table(output_latex, file="summary_stats_feature.txt", row.names=FALSE, col.names=FALSE)
+
+df = apply(monthly_raw[,-(1:2)], 2, summary_function_num)
+df[6,] = paste(df[6,], "%", sep = "")
+
+df2 = data.frame(colnames(df), t(df))
+names_df2 = c("Variable name", 'Unit of measure', "Min.", "Max.", "Mean", "Sd", "Median", "NA %")
+
+units = c("mm", "mm", "% humidity", "% humidity")
+
+df3 = rbind(names_df2,  cbind(df2[,1], cbind(units, df2[,2:7])))
+
+output_latex = apply(df3, 1, latex_line)
+#write.table(output_latex, file="summary_stats_monthly.txt", row.names=FALSE, col.names=FALSE)
+```
+
+#Legend for seasonality plots
+```{r}
+#Make a vector which contains colors that slowly change from cyan to darkblue
+colfunc <- colorRampPalette(c("cyan", "darkblue"))
+gradient_year = colfunc(length(uniq_months))
+df = data.frame(seq(1853, 1964, 1/12)[-1333], rep(1,1332), gradient_year)
+
+legend = ggplot(data = df, aes(x = df[,1], y = df[,2])) +
+  geom_point(color = df[,3], size = 25) +
+  xlab("") +
+  ylab("") +
+  theme_classic() +
+  scale_x_continuous(name = "Years",
+                   limits = c(1853, 1964)) +
+  ggtitle("Legend Seasonality plots") +
+  theme(legend.position = "none",
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title = element_text(family = "serif", size = 20),
+        line = element_blank(),
+        axis.text.x = element_text(size = 25),
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 35),
+        axis.title.x = element_text(size = 25))
+legend_name = "legend_seasonality.pdf"
+print(legend)
+#ggsave(legend_name, plot = legend, device = "pdf")
+```
+
+#Seasonality plots
+```{r}
+#Create seasonality plots for each variable.
+
+feature_vars_all_plot = cbind(feature_vars_all, gradient_year)
+
+y_labs = character(25)
+y_labs[c(1:2,7:8,13:25)] = "Hours"
+y_labs[3:6] = "Temp. Celcius"
+y_labs[9:12] = "hPa"
+
+titles = c("10th percentile temperature",
+           "90th percentile temperature",
+           "Min. temperature",
+           "Max. temperature",
+           "Mean temperature",
+           "Std. temperature",
+           "10th percentile Air pressure",
+           "90th percentile Air pressure",
+           "Min. Air pressure",
+           "Max. Air pressure",
+           "Mean Air pressure",
+           "Std. Air pressure",
+           "Number of dry hours",
+           "Largest streak of dry hours",
+           "Hours of north wind",
+           "Hours of north-east wind",
+           "Hours of north-west wind",
+           "Hours of east wind",
+           "Hours of west wind",
+           "Hours of south wind",
+           "Hours of south-east wind",
+           "Hours of south-west wind",
+           "Hours of low windspeed",
+           "Hours of medium windspeed",
+           "Hours of high windspeed")
+
+titles_plot  = paste("seasonplot_", gsub(" ", "_", titles), '.pdf', sep = '')
+
+
+for(i in 4:ncol(feature_vars_all)){
+  plot = ggplot(data=feature_vars_all_plot, aes(x=month, y=feature_vars_all_plot[,i], group=year, col = gradient_year)) +
+    geom_line(color=gradient_year) +
+    geom_point(color = gradient_year) + 
+    theme(legend.position = "none") +
+    ggtitle(titles[i-3]) + 
+    scale_x_continuous(breaks = 1:12) +
+    xlab("Month") +
+    ylab(y_labs[i-3]) +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 35),
+          axis.text = element_text(size = 30))
+  #ggsave(titles_plot[i-3], plot = plot, device = "png")
+}
+print(plot)
+
+
+#monthly seasonal plot 2
+
+#monthly starts later so gradient_year needs to be started at the right indice
+ind_monthly = which(uniq_months == 18911)
+gradient_year2 = gradient_year[ind_monthly:1332]
+monthly_raw_plot = cbind(monthly_raw, gradient_year2)
+
+y_labs2 = character(4)
+y_labs2[1:2] = "mm"
+y_labs2[3:4] = "% Humidity"
+
+titles2 = c("Percipitation total",
+           "Percipitation max",
+           "Relative humidity mean",
+           "Relative humdity at 8am")
+
+titles2_plot  = paste("seasonplot_", gsub(" ", "_", titles2), '.pdf', sep = '')
+
+
+for(i in 3:ncol(monthly_raw)){
+  plot = ggplot(data=monthly_raw_plot, aes(x=month, y=monthly_raw_plot[,i], group=year, col = gradient_year2)) +
+    geom_line(color=gradient_year2) +
+    geom_point(color = gradient_year2) + 
+    theme(legend.position = "none") +
+    ggtitle(titles2[i-2]) + 
+    scale_x_continuous(breaks = 1:12) +
+    xlab("Month") +
+    ylab(y_labs2[i-2]) +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 35),
+          axis.text = element_text(size = 30))
+
+  #ggsave(titles2_plot[i-2], plot = plot, device = "png")
+}
+plot
+```
+
+#Kernel density cv and/or histogram
+```{r}
+cols = rainbow(length(y_labs), s=.6, v=.9)[sample(1:length(y_labs),length(y_labs))]
+titles_plot_hist  = paste("hist_", gsub(" ", "_", titles), '.pdf', sep = '')
+
+
+
+for(i in 4:ncol(feature_vars_all)){
+  plot = ggplot(feature_vars_all, aes(x= (feature_vars_all)[,i])) + 
+    geom_histogram(aes(y=..density..), colour="black", fill="white", alpha = .1) +
+    geom_density(alpha=.2, fill = cols[i-3]) +
+    xlab(y_labs[i-3]) +
+    ggtitle(titles[i-3]) +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 35),
+          axis.text = element_text(size = 30))
+  #ggsave(titles_plot_hist[i-3], plot = plot, device = "pdf")
+}
+plot
+
+#Kernel density cv and/or histogram monthly part 2
+
+cols = rainbow(length(y_labs2), s=.6, v=.9)[sample(1:length(y_labs2),length(y_labs2))]
+titles2_plot_hist  = paste("hist_", gsub(" ", "_", titles2), '.pdf', sep = '')
+
+
+for(i in 3:ncol(monthly_raw)){
+  plot = ggplot(monthly_raw_plot, aes(x= (monthly_raw_plot)[,i])) + 
+    geom_histogram(aes(y=..density..), colour="black", fill="white", alpha = .1) +
+    geom_density(alpha=.2, fill = cols[i-2]) +
+    xlab(y_labs2[i-2]) +
+    ggtitle(titles2[i-2]) +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 35),
+          axis.text = element_text(size = 30))
+  #ggsave(titles2_plot_hist[i-2], plot = plot, device = "pdf")
+}
+```
+
+#Time series plots
+```{r}
+titles_plot_ts  = paste("timeseries_", gsub(" ", "_", titles), '.pdf', sep = '')
+cols = rainbow(length(y_labs), s=.6, v=.9)[sample(1:length(y_labs),length(y_labs))]
+ind_ts = seq(1853, 1964, 1/12)
+ind_ts = ind_ts[-1333]
+
+for(i in 4:ncol(feature_vars_all)){
+  plot = ggplot(data=feature_vars_all_plot, aes(x=ind_ts, y=feature_vars_all[,i])) +
+    geom_line(color=cols[i-3]) +
+    #geom_point(aes(color=cols[i-3])) + 
+    theme(legend.position = "none") +
+    ggtitle(titles[i-3]) + 
+    xlab("Months") +
+    ylab(y_labs[i-3]) +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 45),
+          axis.text = element_text(size = 30))
+  print(plot)
+  #ggsave(titles_plot_ts[i-3], plot = plot, device = "pdf", width = 12, height = 8)
+}
+
+#timeseries plots 2 
+
+cols = rainbow(length(y_labs2), s=.6, v=.9)[sample(1:length(y_labs2),length(y_labs2))]
+
+titles2_plot_ts  = paste("timeseries_", gsub(" ", "_", titles2), '.pdf', sep = '')
+
+ind_ts2 = seq(1890, 1963, 1/12)
+ind_ts2 = ind_ts2[-877]
+
+for(i in 3:ncol(monthly_raw)){
+  plot = ggplot(data=monthly_raw_plot, aes(x=ind_ts2, y=monthly_raw_plot[,i])) +
+    geom_line(color=cols[i-2]) +
+    theme(legend.position = "none") +
+    ggtitle(titles2[i-2]) + 
+    xlab("Months") +
+    ylab(y_labs2[i-2])  +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 45),
+          axis.text = element_text(size = 30))
+
+  print(plot)
+  #ggsave(titles2_plot_ts[i-2], plot = plot, device = "pdf", width = 12, height = 8)
+}
+```
+
+
+
+#PACF and ACF
+```{r}
+acf_titles = paste("acf_", gsub(" ", "_", titles), '.pdf', sep = '')
+pacf_titles = paste("pacf_", gsub(" ", "_", titles), '.pdf', sep = '')
+
+for(i in 4:ncol(feature_vars_all)){
+  variable = ts(feature_vars_all[,i], frequency = 12)
+  
+  plot1 = ggAcf(variable, lag.max = 12, type = "partial") +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 35),
+          axis.text = element_text(size = 30)) +
+    xlab("Month") +
+    ylim(c(-1,1)) +
+    scale_x_continuous(breaks = 1:12) +
+    ggtitle(titles[i-3])
+  
+  plot2 = ggAcf(variable, lag.max = 12, type = "correlation") +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 35),
+          axis.text = element_text(size = 30)) +
+    xlab("Month") +
+    ylim(c(-1,1)) +
+    scale_x_continuous(breaks = 1:12) +
+    ggtitle(titles[i-3])
+  
+  #ggsave(acf_titles[i-3], plot = plot1, device = "pdf")
+  #ggsave(pacf_titles[i-3], plot = plot2, device = "pdf")
+}
+
+
+acf_titles2 = paste("acf_", gsub(" ", "_", titles2), '.pdf', sep = '')
+pacf_titles2 = paste("pacf_", gsub(" ", "_", titles2), '.pdf', sep = '')
+
+
+
+for(i in 3:ncol(monthly_raw)){
+  variable = ts(monthly_raw[,i], frequency = 12)
+  
+  plot1 = ggAcf(variable, lag.max = 12, type = "partial") +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 35),
+          axis.text = element_text(size = 30)) +
+    xlab("Month") +
+    ylim(c(-1,1)) +
+    scale_x_continuous(breaks = 1:12) +
+    ggtitle(titles2[i-2])
+  
+  plot2 = ggAcf(variable, lag.max = 12, type = "correlation") +
+    theme(axis.title = element_text(family = "serif", size = 35),
+          title = element_text(family = "serif", size = 35),
+          plot.title = element_text(hjust = 0.5, size = 35),
+          axis.text = element_text(size = 30)) +
+    xlab("Month") +
+    ylim(c(-1,1)) +
+    scale_x_continuous(breaks = 1:12) +
+    ggtitle(titles2[i-2])
+  
+  #ggsave(acf_titles2[i-2], plot = plot1, device = "pdf")
+  #ggsave(pacf_titles2[i-2], plot = plot2, device = "pdf")
+}
+```
+
+#Correlation matrices
+```{r}
+inds = seq(1,1332,1332/4)
+
+interval_years = character(4)
+years = feature_vars_all$year
+interval_years[1] = paste(years[inds[1]], " - ", years[inds[2]])
+interval_years[2] = paste(years[inds[2]], " - ", years[inds[3]])
+interval_years[3] = paste(years[inds[3]], " - ", years[inds[4]])
+interval_years[4] = paste(years[inds[4]], " - ", years[1332])
+
+feature_vars_all$percip_total = NA
+feature_vars_all$percip_max = NA
+feature_vars_all$humid_mean = NA
+feature_vars_all$humid_8am = NA
+
+feature_vars_all$percip_total[ind_monthly:1332] = monthly_raw$precipitation_total
+feature_vars_all$percip_max[ind_monthly:1332] = monthly_raw$precipitation_max
+feature_vars_all$humid_mean[ind_monthly:1332] = monthly_raw$rel_hum_mean
+feature_vars_all$humid_8am[ind_monthly:1332] = monthly_raw$rel_hum_8h
+
+
+cormat1 = cor(feature_vars_all[(inds[1]:inds[2]),-c(1:3,32,31,30,29)], use = "pairwise.complete")
+cormat2 = cor(feature_vars_all[(inds[2]:inds[3]),-(1:3)], use = "pairwise.complete")
+cormat3 = cor(feature_vars_all[(inds[3]:inds[4]),-(1:3)], use = "pairwise.complete")
+cormat4 = cor(feature_vars_all[(inds[4]:1332),-(1:3)], use = "pairwise.complete")
+
+cormats = list(cormat1, cormat2, cormat3, cormat4)
+cormats_name = c("cormat1.pdf", "cormat2.pdf", "cormat3.pdf", "cormat4.pdf")
+
+# Get lower triangle of the correlation matrix, we use upper for what you wanted
+get_lower_tri<-function(cormat){
+  cormat[upper.tri(cormat)] <- NA
+  return(cormat)
+}
+# Get upper triangle of the correlation matrix
+get_upper_tri <- function(cormat){
+  cormat[lower.tri(cormat)]<- NA
+  return(cormat)
+}
+
+for(i in 1:4){
+  upper_tri <- get_upper_tri(cormats[[i]])
+  melted_cormat <- melt(upper_tri, na.rm = TRUE)
+  ggheatmap <- ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+  geom_tile(color = "white")+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Pearson correlation") +
+  theme_minimal()+ 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 12, hjust = 1))+
+  coord_fixed()
+
+  plot = ggheatmap + 
+  theme(legend.justification = c(1, 0),
+        legend.position = c(0.3, 0.5),
+        axis.title = element_blank()) +
+  guides(fill = guide_colorbar(title.position = "top", title.hjust = 0.5))
+  print(plot)
+ #ggsave(cormats_name[i], plot = plot, device = "pdf")
+}
+```
+
+#Latex output 
+```{r}
+output_grid <- function(name_vec1){
+  name_vec = name_vec1
+  if(length(name_vec1) < 20){
+    name_vec = character(20)
+    name_vec[1:length(name_vec1)] = name_vec1
+    name_vec[(length(name_vec1)+1):20] = "x.pdf"
+  }
+  
+  output_vec = character(27)
+  output_vec[1] = "*begin{figure}[H]"
+  output_vec[c(6,11,16,21)] = "**[*smallskipamount]"
+  output_vec[26] = "*caption{some}*label{fig:foobar}"
+  output_vec[27] = "*end{figure}"
+  inds = which(!(1:27 %in% c(1,6,11,16,21,26,27)))
+  
+  for(i in 1:length(inds)){
+    output_vec[inds[i]] = paste("*includegraphics[width=.24*textwidth]{", name_vec[i], "}*hfill", sep = "")
+  }
+  return(output_vec)
+}
+
+plots1_season = output_grid(titles_plot[1:20])
+plots2_season = output_grid(c(titles_plot[21:length(titles_plot)], titles2_plot))
+
+plots1_hist = output_grid(titles_plot_hist[1:20])
+plots2_hist = output_grid(c(titles_plot_hist[21:length(titles_plot_hist)], titles2_plot_hist))
+
+plots1_acf = output_grid(acf_titles[1:20])
+plots2_acf = output_grid(c(acf_titles[21:length(acf_titles)], acf_titles2))
+
+plots1_pacf = output_grid(pacf_titles[1:20])
+plots2_pacf = output_grid(c(pacf_titles[21:length(pacf_titles)], pacf_titles2))
+
+plots1_ts = output_grid(titles_plot_ts[1:20])
+plots2_ts = output_grid(c(titles_plot_ts[21:length(titles_plot_ts)], titles2_plot_ts))
+
+
+table_names = c("plots1_season",
+                "plots2_season",
+                "plots1_hist",
+                "plots2_hist",
+                "plots1_acf",
+                "plots2_acf",
+                "plots1_pacf",
+                "plots2_pacf",
+                "plots1_ts",
+                "plots2_ts")
+
+table_names = paste(table_names, ".txt", sep = "")
+
+table_names_list = list(plots1_season,
+                plots2_season,
+                plots1_hist,
+                plots2_hist,
+                plots1_acf,
+                plots2_acf,
+                plots1_pacf,
+                plots2_pacf,
+                plots1_ts,
+                plots2_ts)
+
+for(i in 1:length(table_names)){
+  write.table(table_names_list[[i]], file=table_names[i], row.names=FALSE, col.names=FALSE)
+}
+```
+
+#write csv
+```{r}
+path = "D:\\master\\Thesis\\data\\cleaned_data.csv"
+write.csv(feature_vars_all, path, row.names = FALSE, sep = ';')
+```
+
+

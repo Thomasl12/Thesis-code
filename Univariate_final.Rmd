@@ -1,0 +1,496 @@
+---
+title: "Univariate methods"
+author: "Thomas Lieber"
+date: "31-5-2021"
+output: html_document
+---
+
+```{r}
+rm(list=ls())
+```
+
+#Library
+```{r}
+library("Amelia")
+library("ggplot2")
+library("trend")
+library('imputeTS')
+
+```
+
+#Data
+```{r}
+#working directory
+setwd("D:/master/Thesis/data")
+data = as.data.frame(read.csv("cleaned_data.csv"))
+data2 = as.data.frame(read.csv("Extra_vars.csv"))
+```
+
+#bounds
+```{r}
+#c(column.number, lower.bound, upper.bound)
+index = c(4,5,9,10,11,15:28)
+bound_matrix = matrix(0, nrow = length(index), ncol = 3)
+for(i in 1:length(index)){
+  bound_matrix[i,1:3] = c(index[i], 0, Inf)
+}
+```
+
+#Variable names
+```{r}
+titles = c("Hours >10th percentile temperature",
+           "Hours <90th percentile temperature",
+           "Min. temperature",
+           "Max. temperature",
+           "Mean temperature",
+           "Std. temperature ",
+           "Hours >10th percentile air pressure",
+           "Hours <90th percentile air pressure",
+           "Min. air pressure",
+           "Max. air pressure",
+           "Mean air pressure",
+           "Std. air pressure",
+           "Dry hours",
+           "Max. streak dry hours",
+           "Hours of north wind",
+           "Hours of north-east wind",
+           "Hours of north-west wind",
+           "Hours of east wind",
+           "Hours of west wind",
+           "Hours of south wind",
+           "Hours of south-east wind",
+           "Hours of south-west wind",
+           "Hours of low windspeed",
+           "Hours of medium windspeed",
+           "Hours of high windspeed")
+
+titles2 = c("Percipitation total",
+           "Percipitation max",
+           "Relative humidity mean",
+           "Relative humdity at 8am")
+```
+
+#transform
+```{r}
+#log transsform to make distributions 'more' symmetrical
+ind = c(4,5,10,11)
+data_t = data
+data_t[,ind] = log(data[,ind] + 3)
+
+
+feature_vars_imputed_t = amelia(data_t[,(1:28)], 
+                              m = 5, 
+                              idvars = c("month", "year"), 
+                              ts = "years_months",  
+                              empri = .01*nrow(data[,(1:28)]),
+                              bound = bound_matrix,
+                              max.resample = 1000,
+                              seed = 2021)
+
+#impute last value with mean
+set1 = feature_vars_imputed_t$imputations$imp1
+set1 = apply(set1, 2, na_mean)
+not_hour = c(1:3, 6:9, 12:15)
+set1[,not_hour] = round(set1[,not_hour])
+set1[,ind] = exp(set1[,ind])-3 #backtransform
+
+
+sum(is.na(set1))
+set1 = as.data.frame(set1)
+set1 = apply(set1, 2, na_mean)
+```
+
+#Extra vars 
+```{r}
+
+y_min = min(data2$year)
+y_max = max(data2$year)
+
+extra_vars = data[which(data$year >= y_min & data$year <= y_max),]
+#extra_vars = data
+
+index = c(4,5,9,10,11,15:30)
+bound_matrix2 = matrix(0, nrow = length(index)+2, ncol = 3)
+for(i in 1:length(index)){
+  bound_matrix2[i,1:3] = c(index[i], 0, Inf)
+}
+bound_matrix2[length(index)+1,] = c(31, 0, 100)
+bound_matrix2[length(index)+2,] = c(32, 0, 100)
+
+extra_vars[,ind] = log(extra_vars[,ind] + 3)
+
+feature_vars_imputed_extra = amelia(extra_vars, 
+                              m = 5, 
+                              idvars = c("month", "year"), 
+                              ts = "years_months",  
+                              empri = .01*nrow(extra_vars),
+                              bound = bound_matrix2,
+                              max.resample = 1000,
+                              seed = 2021)
+
+#impute last value with mean
+set2 = feature_vars_imputed_extra$imputations$imp1
+set2 = apply(set2, 2, na_mean)
+
+sum(is.na(set2))
+set2 = as.data.frame(set2[,c(1:3,29:30)])
+```
+
+
+#extra vars 2
+```{r}
+y_min = min(data2$year)
+y_max = 1947
+
+extra_vars = data[which(data$year >= y_min & data$year <= y_max),]
+#extra_vars = data
+
+index = c(4,5,9,10,11,15:30)
+bound_matrix2 = matrix(0, nrow = length(index)+2, ncol = 3)
+for(i in 1:length(index)){
+  bound_matrix2[i,1:3] = c(index[i], 0, Inf)
+}
+bound_matrix2[length(index)+1,] = c(31, 0, 100)
+bound_matrix2[length(index)+2,] = c(32, 0, 100)
+
+extra_vars[,ind] = log(extra_vars[,ind] + 3)
+
+feature_vars_imputed_extra2 = amelia(extra_vars, 
+                              m = 5, 
+                              idvars = c("month", "year"), 
+                              ts = "years_months",  
+                              empri = .01*nrow(extra_vars),
+                              bound = bound_matrix2,
+                              max.resample = 1000,
+                              seed = 2021)
+
+#impute last value with mean
+set3 = feature_vars_imputed_extra2$imputations$imp1
+set3 = apply(set3, 2, na_mean)
+
+sum(is.na(set3))
+set3 = as.data.frame(set3[,c(1:3,29:32)])
+```
+
+#Mann Kendall
+```{r}
+percip_missing = which(is.na(data$percip_total[which(data$year>1889)]))
+set1 = feature_vars_imputed_t$imputations$imp2
+set1 = apply(set1, 2, na_mean)
+not_hour = c(1:3, 6:9, 12:15)
+set1[,not_hour] = round(set1[,not_hour])
+set1[,ind] = exp(set1[,ind])-3 #backtransform
+
+
+results_stats = data.frame(names = colnames(data)[4:32],
+                           z_values_csmk = numeric(29),
+                           p_values_csmk = numeric(29),
+                           sens_slope = numeric(29), 
+                           sign = character(29))
+
+
+
+for(i in 4:28){
+  test1 = ts(set1[,i], frequency = 12)
+  results_csmk = csmk.test(test1, alternative = "two.sided")
+  results_stats[i-3,3] = results_csmk$p.value
+  results_stats[i-3,2] = results_csmk$statistic
+
+  results_stats[i-3,4] = sea.sens.slope(test1)
+
+}
+
+for(i in 4:5){
+  test1 = ts(set2[,i], frequency = 12)
+  #results_stats$names[i+22] = colnames(set2)[,i]
+  results_csmk = csmk.test(test1, alternative = "two.sided")
+  results_stats[i+22,3] = results_csmk$p.value
+  results_stats[i+22,2] = results_csmk$statistic
+
+  results_stats[i+22,4] = sea.sens.slope(test1)
+}
+
+for(i in 6:7){
+  test1 = ts(set3[,i], frequency = 12)
+  results_csmk = csmk.test(test1, alternative = "two.sided")
+  results_stats[i+22,3] = results_csmk$p.value
+  results_stats[i+22,2] = results_csmk$statistic
+
+  results_stats[i+22,4] = sea.sens.slope(test1)
+}
+
+results_stats$sign = ifelse(results_stats$p_values_csmk < 0.05, "*", ".") 
+```
+
+#output SMK
+```{r}
+output_csmk = data.frame(names = c(titles, titles2), 
+                         z_values_csmk = results_stats$z_values_csmk,
+                         p_values_csmk = results_stats$p_values_csmk,
+                         sign = rep("-", 29),
+                         sens_slope = results_stats$sens_slope,
+                         change_overtime = numeric(29))
+output_csmk$change_overtime = output_csmk$sens_slope * 1332/12
+output_csmk$change_overtime[26:27] = output_csmk$sens_slope[26:27] * nrow(set2)/12
+output_csmk$change_overtime[28:29] = output_csmk$sens_slope[28:29] * nrow(set3)/12
+
+
+star = output_csmk$p_values_csmk < 0.05 & output_csmk$p_values_csmk > 0.001
+double_star = output_csmk$p_values_csmk <= 0.001
+
+output_csmk$sign[star] = "*"
+output_csmk$sign[double_star] = "**"
+
+latex_line <- function(row){
+  latex_row = paste(as.character(row), collapse = "&")
+  add = " \\\ hline"
+  latex_row = paste(latex_row, add)
+  return(latex_row)
+}
+
+output_csmk2 = apply(t(output_csmk), 2, latex_line)
+
+#write.table(output_csmk2, file = "CSMK.txt", row.names=FALSE, col.names=FALSE)
+```
+
+#find indices of variables
+```{r}
+find_cp <- function(original_v, v, cp_t){
+  ind = which(original_v %in% v)
+  readyforstreak = ind[1:(length(ind)-1)] - ind[2:length(ind)]
+  readyforstreak[readyforstreak != -1] = 0
+  
+  values = rle(readyforstreak)$lengths
+  start = sum(values[1:(which.max(values)-1)]) + 1
+  cp  = cp_t + start
+  return(cp)
+}
+```
+
+
+#SNHT
+```{r}
+results = c()
+
+noise = rnorm(1332, sd = 0.01)
+
+add_queue <- function(variable, cp){
+  queue = list()
+  n_variable1 = variable[1:cp]
+  n_variable2 = variable[(cp+1):length(variable)]
+  queue[[1]] = n_variable1
+  queue[[2]] = n_variable2
+  return(queue)
+}
+
+
+SNHT_sig_breakpoints <- function(variable1, its = 500){
+
+  queue_list = list()
+  noise = rnorm(length(variable1), sd = 0.01)
+  variable1 = variable1 + noise
+  test = snh.test(variable1, its)
+  sig_index = c()
+  if(test$p.value > 0.05){
+    return("none")
+  }
+  if(test$p.value <= 0.05){
+    cp1 = test$estimate
+  }
+  
+  #results = c(paste("first", name, sep = "_"), cp1)
+  
+  queue_list = c(queue_list, add_queue(variable1, cp1))
+  #var_lengths = c()
+  
+  sig_index = c(sig_index, cp1)
+  
+  #count = 1
+  while(length(queue_list)>0){
+    var = queue_list[[1]]
+    if(length(var) < 2){
+      queue_list[[1]] = NULL
+      var = queue_list[[1]]
+    }
+    #var_lengths = c(var_lengths, length(var))
+    test = snh.test(var, its)
+    queue_list[[1]] = NULL
+    if(test$p.value <= 0.05){
+      cp1 = test$estimate
+      sig_index = c(sig_index, which(variable1 == var[cp1]))
+      queue_list = c(queue_list, add_queue(var, cp1))
+      
+      #results = rbind(results, c(paste(count, name, sep ="_"), cp1))
+      #count = count + 1
+    }
+    
+  }
+
+  return(sig_index)
+}
+
+
+
+```
+
+#vars SNHT
+```{r}
+sig_list = list()
+years_list = list()
+to_year <- function(x, intercept = 1853){
+  intercept + (x*1/12)
+}
+
+
+for(i in 4:28){
+  print(i)
+  sigs = SNHT_sig_breakpoints(set1[,i])
+  sig_list[[colnames(set1)[i]]] = sigs
+  if(sigs[1] != "none"){
+    years_list[[colnames(set1)[i]]] = to_year(sigs)
+  }
+  
+}
+```
+
+#SNHT results
+```{r}
+matrix_outputs = matrix(0, nrow = 29, ncol = 2)
+matrix_outputs[,1] = colnames(data[4:32])
+
+for(j in 1:24){
+  ex = sig_list[[j]]
+  
+  if(ex != "none"){ 
+    print(j)
+    ex_y = round(to_year(ex),1)
+    
+    new = paste(matrix_outputs[j,1], "&", sep = "")
+    new = paste(new,  ex_y[1],  sep = "")
+    if(length(ex)>1){
+      for(i in 2:length(ex_y)){
+      new = paste(new, " - ", ex_y[i], sep = "")
+      }
+      
+    }
+  }
+  matrix_outputs[j,2] = new
+ 
+}
+
+```
+
+#Latex SNHT results
+```{r}
+matrix_outputs = matrix(0, nrow = 29, ncol = 2)
+matrix_outputs[,1] = c(titles, titles2)
+
+stripes <- function(x, intercept = 1853){
+  if(length(x) == 1){
+    if(x == "none"){
+      new = x
+    }
+    if(x != "none"){
+      new = round( to_year(x, intercept), 1)
+    }
+  }
+  
+  if(length(x) > 1){
+    x = sort(x)
+    new = round( to_year(x[1], intercept), 1)
+
+    for(i in 2:length(x)){
+      new = paste(new, " - ", round( to_year(x[i], intercept), 1), sep = "")
+    }
+  }
+  return(new)
+} 
+
+for(j in 1:25){
+  ex = sig_list[[j]]
+  matrix_outputs[j,2] = stripes(ex)
+}
+
+for(j in 26:27){
+  ex = SNHT_sig_breakpoints(set2[,(j-22)])
+  matrix_outputs[j,2] = stripes(ex, intercept = 1890)
+}
+
+for(j in 28:29){
+  ex = SNHT_sig_breakpoints(set3[,(j-22)])
+  matrix_outputs[j,2] = stripes(ex, intercept = 1890)
+}
+
+
+#write.table(paste(matrix_outputs[,1], "&", matrix_outputs[,2], "** *hline", sep = ""), file = "SNHT_breakpoints.txt", row.names=FALSE, col.names=FALSE)
+
+```
+
+#Latex over imputation plots
+```{r}
+output_func <- function(names){
+  output_vec = character(10)
+  fill = "example.pdf"
+  if(length(names) < 8){
+    names = c(names, rep(fill, 8 - length(names)))
+  }
+  output_vec[1] = "*begin{figure}[H]"
+  output_vec[10] = "*end{figure}"
+  
+  output_vec[2:9] = paste("*includegraphics[width=.55*textwidth]{plots/plots imputation/", 
+                        names[1:8],
+                          "}*hfill", sep = '')
+  return(output_vec)
+}
+
+
+all_names = character(32)
+
+
+
+for(i in 4:28){
+  all_names[i-3] = paste("fv_overimpute_t_",colnames(data)[i],".pdf", sep = '')
+
+}
+
+
+for(i in 29:30){
+  all_names[i-3] = paste("fv_extra1_overimpute_",colnames(data)[i],".pdf", sep = '')
+
+}
+
+
+for(i in 31:32){
+  all_names[i-3] = paste("fv_extra2_overimpute_",colnames(data)[i],".pdf", sep = '')
+
+}
+
+
+output_vecs = "eh"
+seqs = seq(0, 32, 8)
+seqs[1] = 1
+for(i in 1:(length(seqs)-1)){
+  output_vecs  = c(output_vecs, output_func(all_names[seqs[i]:seqs[i+1]]))
+}
+
+#write.table(output_vecs, file = "imputation_plots.txt", row.names=FALSE, col.names=FALSE)
+```
+
+#Save imputed data
+```{r}
+all_data = as.data.frame(set1)
+min_year = min(set2$year)
+all_data$percip_total[which(all_data$year == min_year)[1]:1332] = set2$percip_total
+all_data$percip_max[which(all_data$year == min_year)[1]:1332] = set2$percip_max
+
+min_year = min(set3$year)
+max_year = max(set3$year)
+all_data$humid_mean = NA
+all_data$humid_8am = NA
+all_data$humid_mean[which(all_data$year == min_year)[1]:which(all_data$year == max_year)[1]] = set3$humid_mean
+all_data$humid_8am[which(all_data$year == min_year)[1]:which(all_data$year == max_year)[1]] = set3$humid_8am
+
+
+path = "D:\\master\\Thesis\\data\\imputed_data.csv"
+#write.csv(all_data, path, row.names = FALSE, sep = ';')
+```

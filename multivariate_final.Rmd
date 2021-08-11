@@ -1,0 +1,955 @@
+---
+title: "Multivariate"
+author: "Thomas Lieber"
+date: "12-6-2021"
+output: html_document
+---
+
+```{r}
+rm(list=ls())
+```
+
+#Library
+```{r}
+library(ConsensusClusterPlus)
+library(caret)
+library(dbscan)
+library(ggplot2)
+library(MASS)
+library(mgcv)
+library(neatmaps)
+library(randomForest)
+library(reshape2)
+library(Rtsne)
+library(vegan)
+```
+
+#Data
+```{r}
+#working directory
+setwd("D:/master/Thesis/data")
+data = as.data.frame(read.csv("imputed_data.csv"))
+```
+#set data
+```{r}
+data1 = data[,-c(29:32)] #Remove percipitation and humidity variables as not all observations are available here.
+
+standardize <- function(x){(x - mean(x))/sd(x)}
+
+data1_z = as.data.frame(apply(data1[,-c(1:3,26:28)], 2, standardize)) #Remove year, year_months and months from the to be standardized. Also remove wind strength variables as they are not homogenous enough to be used for the analyses.
+```
+
+#Distance euclidean
+```{r}
+eu_data1 = dist(data1_z) #Transform the data to a euclidean distance matrix.
+```
+
+
+#consensus cluster
+```{r}
+set.seed(2020)
+consensus = ConsensusClusterPlus(eu_data1, maxK = 16, reps = 50, clusterAlg = "pam", seed = 2020)
+```
+
+#PAC function
+```{r}
+PAC2 <- function(cons_r){
+  Kvec = 2:length(cons_r)
+  x1 = 0.1; x2 = 0.9 # threshold defining the intermediate sub-interval
+  PAC = rep(NA,length(Kvec)) 
+  names(PAC) = paste("K=",Kvec,sep="") # from 2 to maxK
+  for(i in Kvec){
+    M = cons_r[[i]]$consensusMatrix
+    Fn = ecdf(M[lower.tri(M)])
+    PAC[i-1] = Fn(x2) - Fn(x1)
+  }#end for iw\
+  return(PAC)
+}
+
+
+abs(pac_consensus[1:15] - pac_consensus[2:16])
+pac_df = data.frame(PAC = PAC2(consensus), K = 2:16)
+```
+#clustering PAC plot
+```{r}
+plot = ggplot(data=pac_df, aes(x=K, y=PAC)) +
+  geom_point(size = 4) +
+  geom_line() +
+  #scale_x_discrete(labels = factor(means$V1)) +
+  ggtitle("PAC plot") +
+  xlab("K") +
+  ylab("PAC") +
+  ylim(c(0,0.5)) +
+  #theme_bw()+
+  theme_bw() +
+  theme(axis.text.x = element_text(family = "serif", size = 20), 
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 30),
+        axis.text.y = element_text(family = "serif", size = 25),
+        legend.position = "none", 
+        axis.title.y = element_text(family = "serif", size = 25),
+        axis.title.x = element_text(family = "serif", size = 25))
+
+plot
+```
+
+#mean absolute difference and pairwise difference function
+```{r}
+
+
+titles = c("year_months",
+           "Year",
+           "Month",
+           "Hours >10th percentile temperature",
+           "Hours <90th percentile temperature",
+           "Min. temperature",
+           "Max. temperature",
+           "Mean temperature",
+           "Std. temperature ",
+           "Hours >10th percentile air pressure",
+           "Hours <90th percentile air pressure",
+           "Min. air pressure",
+           "Max. air pressure",
+           "Mean air pressure",
+           "Std. air pressure",
+           "Dry hours",
+           "Max. streak dry hours",
+           "Hours of north wind",
+           "Hours of north-east wind",
+           "Hours of north-west wind",
+           "Hours of east wind",
+           "Hours of west wind",
+           "Hours of south wind",
+           "Hours of south-east wind",
+           "Hours of south-west wind",
+           "Hours of low windspeed",
+           "Hours of medium windspeed",
+           "Hours of high windspeed",
+           "classess")
+
+
+k = 12
+
+z_data1 = as.data.frame(apply(data1, 2, standardize))
+
+
+classes = consensus[[k]]$consensusClass
+table(classes)
+
+means = as.data.frame(matrix(0, ncol(z_data1), 4))
+
+#means[,1] = colnames(z_data1)
+means[,1] = titles
+
+mean_per_class <- function(x, classes){
+    mean_pc = matrix(0, length(unique(classes)), 2)
+    for(i in unique(classes)){
+      mean_pc[i,1] = mean(x[which(classes == i)])
+      mean_pc[i,2] = median(x[which(classes == i)])
+    }
+    mad = abs(max(mean_pc[,1]) - min(mean_pc[,1]))
+    med = max(mean_pc[,2]) - min(mean_pc[,2])
+    #sds = sd(mean_pc)
+    #sds = mean_absolute_difference(mean_pc)
+    sds = mean(dist(mean_pc[,1]))#pairwise distances mean
+    return(c(mad, sds, med))
+}
+
+for(j in 1:nrow(means)){
+
+  var = z_data1[,j]
+  
+  
+  means[j,2:4] = mean_per_class(var, classes)
+}
+means = means[order(means[,2]),]
+means$x = 1:nrow(means)
+means = means[-c(7,29),] #delete years_months, time and classes
+```
+
+#mean difference plot
+```{r}
+plot = ggplot(data=means[-27,], aes(x=reorder(V1,V2), y=V2)) +
+  geom_point(shape = 18, size = 5) +
+  scale_x_discrete(labels = factor(means$V1)) +
+  ggtitle("Maximium mean difference between clusters") + 
+  ylab("Max standardized mean difference") + 
+  xlab("") +
+  ylim(c(0,3.5)) +
+  coord_flip()+
+  theme_bw() +
+  theme(
+    axis.title = element_text(vjust = 0.5, family = "serif", size = 25),
+   axis.text.x = element_text( vjust = 0.5, family = "serif", size = 25),
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 25),
+        axis.text.y = element_text(family = "serif", size = 25),
+        legend.position = "none", 
+ 
+        axis.title.y = element_text(family = "serif", size = 25)
+    )
+
+plot
+```
+
+#pairwise distance difference plot
+```{r}
+means = means[order(means[,4]),]
+plot = ggplot(data=means[-27,], aes(x=reorder(V1,V3), y=V3)) +
+  #geom_line() +
+  geom_point(shape = 18, size = 5) +
+  ylim(c(0,1.5)) +
+  scale_x_discrete(labels = factor(means$V1)) +
+  ggtitle("Mean pairwise distance between clusters") +
+  ylab("Standardize mean pairwise distance") +
+  xlab("") +
+  coord_flip()+
+  theme_bw() + 
+  theme(
+    axis.title = element_text(vjust = 0.5, family = "serif", size = 25),
+   axis.text.x = element_text( vjust = 0.5, family = "serif", size = 25),
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 25),
+        axis.text.y = element_text(family = "serif", size = 25),
+        legend.position = "none", 
+ 
+        axis.title.y = element_text(family = "serif", size = 25)
+    )
+
+
+plot
+
+```
+
+#consensus 6 time periods
+```{r}
+ind = round(seq(0, 111, 111/8)[4:9] * 12)
+cons_list = list()
+set.seed(2020)
+i = 1
+time = numeric(6)
+
+for(i in 1:length(ind)){
+  ptm = proc.time()
+  print(i)
+  interval = (ind[i]-500):ind[i]
+  eu_data_part = dist(data1_z[interval,])
+cons_list [[i]] = consensus_part = ConsensusClusterPlus(eu_data_part, maxK = 16, reps = 50, clusterAlg = "pam", seed = 2020)
+  time[i] = (proc.time() - ptm)[1]
+}
+```
+
+
+
+#difference per min and max standardize value of each cluster per variable plotted on the x axis 
+```{r}
+#difference per min and max standardize value of each cluster per variable plotted on the x axis 
+k = 12
+
+z_data1 = as.data.frame(apply(data1[,-c(1,29)], 2, standardize))
+
+classes = consensus[[k]]$consensusClass
+table(classes)
+
+means = as.data.frame(matrix(0, ncol(z_data1), 4))
+means[,1] = titles[-c(1,29)] #colnames(z_data1)
+
+
+means_list = list()
+
+for(i in 1:6){
+  classes = cons_list[[i]][[k]]$consensusClass
+  print(i)
+  interval = (ind[i]-500):ind[i]
+  interval_s = interval[!(interval %in% c(371))]
+  print(table(classes))
+  for(j in 1:nrow(means)){
+    
+
+  var = z_data1[interval_s,j]
+  
+  
+  means[j,2:4] = mean_per_class(var, classes)
+  }
+  means = means[order(means[,2]),]
+  means$x = 1:nrow(means)
+  means_list[[i]] = means
+}
+
+end = round(1853 + 1/12 * ind)
+start = round(1853 + 1/12 * (ind- 500)) 
+
+PAC_matrix = NULL
+
+for(i in 1:6){
+  time_period = paste(start[i], end[i], sep = " - ")
+  PAC_matrix = rbind(PAC_matrix, cbind(PAC2(cons_list[[i]]), 1:16, rep(time_period, 16)))
+}
+pac_df2 = as.data.frame(PAC_matrix)
+pac_df2$V1 = as.numeric(pac_df2$V1)
+pac_df2$V2 = as.numeric(pac_df2$V2)
+
+```
+#plots PAC
+```{r}
+#clustering PAC plot
+
+colfunc <- colorRampPalette(c("cyan", "darkblue"))
+colors_year_periods = colfunc(6)
+
+plot = ggplot(data=pac_df2, aes(x=V2, y=V1, col = V3)) +
+  geom_point(size = 4) +
+  geom_line() +
+  #scale_x_discrete(labels = factor(means$V1)) +
+  ggtitle("PAC plot seperate time periods") +
+  xlab("K") +
+  ylab("PAC") +
+  ylim(c(0,0.8)) +
+  theme_bw()+
+  theme(axis.text.x = element_text(family = "serif", size = 20), 
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 30),
+        axis.text.y = element_text(family = "serif", size = 25),
+        #legend.position = "none", 
+        axis.title.y = element_text(family = "serif", size = 25),
+        axis.title.x = element_text(family = "serif", size = 25),
+        legend.key.size = unit(2, 'cm'),
+        legend.title = element_text(family = "serif", size = 20),
+        legend.text = element_text(family = "serif", size = 20))
+
+
+plot+ labs(color='Time periods') + scale_color_manual(values=colors_year_periods)
+
+
+
+```
+
+
+
+
+#plots
+```{r}
+for(i in 1:6){
+  plot = ggplot(data=means_list[[i]], aes(x=reorder(V1,V2), y=V2)) +
+  #geom_line() +
+  geom_point(shape = 18, size = 5) +
+  ggtitle(paste("Maximium mean difference between classes set ", i, sep = "")) + 
+  ylab("Max standardized mean difference") + 
+  xlab("") +
+  ylim(c(0,4)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, family = "serif", size = 15), 
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 20),
+        axis.text.y = element_text(family = "serif", size = 15),
+        legend.position = "none", axis.title.x = element_blank(), 
+        axis.title.y = element_text(family = "serif", size = 15))
+  print(plot)
+}
+```
+
+
+#plots all sets maxmeandiff
+```{r}
+all_means = NULL
+
+
+
+for(i in 1:6){
+  time_period = paste(start[i], end[i], sep = " - ")
+  all_means = rbind(all_means, cbind(means_list[[i]], rep(time_period, nrow(means))))
+  #all_means = rbind(all_means, cbind(means_list[[i]], rep(i, nrow(means))))
+}
+
+#all_means[,6] = as.character(all_means[,6])
+
+plot = ggplot(data=all_means, aes(x=V1, y=V2, col = all_means[,6])) +
+  #geom_line() +
+  geom_point(shape = 18, size = 5) +
+  ggtitle(paste("Maximium mean difference between all datasets ",  sep = "")) + 
+  ylab("Max standardized mean difference") + 
+  xlab("") +
+  ylim(c(0,4)) +
+  coord_flip()+
+  theme_bw() +
+  theme(axis.text.x = element_text(family = "serif", size = 20), 
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 20),
+        axis.text.y = element_text(family = "serif", size = 15),
+        #legend.position = "none", 
+        axis.title.x = element_text(family = "serif", size = 25), 
+        axis.title.y = element_text(family = "serif", size = 15),
+        legend.key.size = unit(2, 'cm'),
+        legend.title = element_text(family = "serif", size = 20),
+        legend.text = element_text(family = "serif", size = 20))
+
+print(plot+ labs(color='Time periods') + scale_color_manual(values=colors_year_periods)  )
+```
+
+
+#plots all sets pairs
+```{r}
+plot = ggplot(data=all_means, aes(x=V1, y=V3, col = all_means[,6],)) +
+  #geom_line() +
+  geom_point(shape = 18, size = 5) +
+  ggtitle(paste("Pairwise mean difference between all datasets ",  sep = "")) + 
+  ylab("Pairwise standardized mean difference") + 
+  xlab("") +
+  ylim(c(0,1.5)) +
+  coord_flip()+
+  
+  theme(axis.text.x = element_text(family = "serif", size = 25), 
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 20),
+        axis.text.y = element_text(family = "serif", size = 15),
+        #legend.position = "none", 
+        axis.title.x = element_text(family = "serif", size = 25), 
+        axis.title.y = element_text(family = "serif", size = 15),
+        legend.key.size = unit(2, 'cm'),
+        legend.title = element_text(family = "serif", size = 20),
+        legend.text = element_text(family = "serif", size = 20))
+
+print(plot+ labs(color='Time periods') + scale_color_manual(values=colors_year_periods)  )
+```
+
+
+#Functions for saving the errors over time
+```{r}
+
+inds <- function(x){
+  c(start_point + x - 1, (2*start_point)+x - 1)
+}
+
+class_error <- function(actual, pred){
+  acc = numeric(12)
+  for(i in 1:12){
+    acc[i] = mean(actual[actual == i] == pred[actual == i], na.rm = T)
+  }
+  return(acc)
+}
+
+int_error <- function(pred, actual){
+  m_pred = matrix(rep(1:12, length(pred)), nrow = length(pred), byrow = T)
+  m_pred = abs(m_pred - pred)[actual]
+  return(m_pred)
+}
+
+error_sym <- function(x_pred, x_actual){
+   abs(((x_actual - x_pred + 6) %% 12) - 6)
+}
+
+```
+
+
+sym error func:
+$f(y , \hat{y}) = |((y - \hat{y} + 6)\text{ }mod \text{ } 12) - 6|$
+
+
+#LDA
+```{r}
+month_names = c("January",
+                 "February",
+                 "March",
+                 "April",
+                 "May",
+                 "June",
+                 "July",
+                 "August",
+                 "September",
+                 "October",
+                 "November",
+                 "December")
+
+set.seed(20); palette = distinctColorPalette(12)#; pie(rep(1,12), col = palette)
+
+lda_data = cbind(data1$month, data1[,-c(1:3,26:28)])
+colnames(lda_data)[1] = "month"
+lda_data$month = factor(lda_data$month)
+model = lda(month ~ ., data = lda_data)
+
+
+
+lda.data <- cbind(lda_data, predict(model)$x)
+lda.data$month = as.character(lda.data$month)
+group_col = character(nrow(lda.data))
+for(i in 1:12){
+  lda.data$month[which(lda.data$month == i)] = month_names[i]
+  group_col[lda.data$month == month_names[i]] = palette[i]
+}
+lda.data$month = factor(lda.data$month, levels = month_names)
+
+plot = ggplot(lda.data, aes(LD1, LD2, col = month)) +
+  geom_point(size = 2) +
+  theme(
+  legend.title = element_text(size = 14),
+  legend.text = element_text(size = 15),
+  legend.key.size = unit(1, "cm") 
+  )
+
+plot + guides(colour = guide_legend(override.aes = list(size=7))) + labs(color='Months') + scale_color_manual(values=group_col) 
+
+```
+
+#lda 2 
+```{r}
+
+years = 40
+start_point = (12 * years) + 1
+
+
+ind = round(seq(0, 111, 111/8)[4:9] * 12)
+cons_list = list()
+set.seed(2020)
+
+
+
+lda_data_main = lda_data[1:(ind[1]),-24]
+
+lda_m = lda(month ~ ., data = lda_data_main)
+
+
+lda.data <- cbind(lda_data, predict(model)$x)
+lda.data$month = as.character(lda.data$month)
+group_col = character(nrow(lda_data_main))
+
+
+
+
+lda.data <- cbind(lda_data_main, predict(lda_m)$x)
+
+lda.data$month = as.character(lda.data$month)
+group_col = character(nrow(lda.data))
+for(i in 1:12){
+  lda.data$month[which(lda.data$month == i)] = month_names[i]
+  group_col[lda.data$month == month_names[i]] = palette[i]
+}
+lda.data$month = factor(lda.data$month, levels = month_names)
+
+plot = ggplot(lda.data, aes(LD1, LD2, col = month)) +
+  xlab("LD1")+
+  ylab("LD2")+
+  ggtitle("LDA components plot") + 
+  geom_point(size = 2) +
+  theme_bw() +
+  theme(
+  plot.title = element_text(hjust = 0.5, family = "serif", size = 20),
+  legend.title = element_text(size = 20, family = "serif"),
+  legend.text = element_text(size = 20, family = "serif"),
+  legend.key.size = unit(1, "cm"),
+  axis.text = element_text(size = 20, family = "serif"),
+  axis.title = element_text(size = 20, family = "serif")
+  
+  )
+
+plot + guides(colour = guide_legend(override.aes = list(size=7))) + labs(color='Months') + scale_color_manual(values=group_col) 
+
+
+
+
+
+```
+
+#Matrices
+```{r}
+
+
+
+
+output = matrix(0, 371 * 12, 4)
+output[,1] = 1:(371*12)
+output[,3] = rep(1:12, 371)
+output[,4] = rep(1:371, 12)
+
+month_inds = seq(1, 371*12, 12)
+
+mean_error_sym = numeric(371)
+
+error_sym2 <- function(pred_v, actual_v){
+  l = length(pred_v)
+  out = numeric(l)
+  
+  for(i in 1:l){
+    out[i] = error_sym(pred_v[i], actual_v[i])
+  }
+  return(mean(out))
+}
+
+c_m = matrix(0, 12, 12)
+
+
+for(i in 1:371){
+  ind = inds(i)
+  test = lda_data[ind[1]:ind[2],]
+  actuals = test$month
+  preds = predict(lda_m, test)$class
+  conf_matrix = confusionMatrix(actuals, preds)$table
+  c_m = c_m + conf_matrix
+  if(i == 100){
+    first100_cm = round(c_m * 1/100)
+    c_m = matrix(0, 12, 12)
+  }
+  if(i == 280){
+    first280_cm = round(c_m * 1/100)
+    c_m = matrix(0, 12, 12)
+  }
+
+  accs = class_error(actuals, preds)
+  mean_error_sym[i] = mean(error_sym(as.numeric(preds), as.numeric(actuals)))
+  # conf_m = confusionMatrix(preds, actuals)
+  
+  #output[month_inds[i]:(month_inds[i]+11),2] = conf_m$byClass[,11]
+  #output[month_inds[i]:(month_inds[i]+11),2] =  accs = class_error(actuals, preds)
+  
+  out_p = numeric(12)
+  for(j in 0:11){
+    out_p[j+1] = mean(error_sym(as.numeric(preds[preds == j+1]), as.numeric(actuals[preds == j+1])))
+  }
+  output[month_inds[i]:(month_inds[i]+11),2] = out_p
+
+}
+last_cm = round(c_m * 1/(371-281))
+
+
+```
+
+
+#matrices2
+```{r}
+inds = seq(1,1332,1332/4)
+
+interval_years = character(4)
+years = data1$year
+interval_years[1] = paste(years[inds[1]], " - ", years[inds[2]])
+interval_years[2] = paste(years[inds[2]], " - ", years[inds[3]])
+interval_years[3] = paste(years[inds[3]], " - ", years[inds[4]])
+interval_years[4] = paste(years[inds[4]], " - ", years[1332])
+
+
+
+confusion_boot <- function(dat, reps = 500, samples = 500){
+  conf_matrix = matrix(0, 12, 12)
+  for(i in 1:reps){
+    inds = sample.int(length(dat), samples, replace = T)
+    actuals = dat$month
+    preds = predict(lda_m, dat)$class
+    conf_matrix = conf_matrix + confusionMatrix(actuals, preds)$table
+  }
+  conf_matrix = conf_matrix * 1/reps
+  return(conf_matrix)
+}
+
+
+confusion_list = list()
+for(i in 1:4){
+  index = (inds[i]:(inds[i] + 332))
+  test = lda_data[index,]
+  confusion_list[[i]] = confusion_boot(test, 1000, 1000)
+}
+
+to_percentage <- function(mat){
+  for(i in 1:nrow(mat)){
+    mat[i,] = (mat[i,] / sum(mat[i,])) * 100
+  }
+  return(round(mat,1))
+}
+
+
+
+
+```
+
+#prep
+```{r}
+melted_list = list()
+
+for(i in 1:4){
+  melt_perc = melt(to_percentage(confusion_list[[i]]))
+  melt_perc[,1] = factor(melt_perc[,1], labels = month_names)
+  melt_perc[,2] = factor(melt_perc[,2], labels = month_names)
+  melted_list[[i]] = melt_perc
+}
+
+```
+
+
+#correlation matrices
+```{r}
+i = 1
+for(i in 1:4){
+  plot = ggplot(melted_list[[i]], aes(Prediction, Reference)) +
+    coord_flip() +
+    geom_tile(aes(fill = value), colour = "white") +
+    scale_fill_gradient2(low = "white", high = "red", mid = "blue", 
+     midpoint = 50, limit = c(0,100), space = "Lab", 
+    name="Percentage per class")  +
+    
+    ggtitle(paste("Prediction percentages of time period", interval_years[i])) +
+    geom_text(aes(Prediction, Reference, label = value), color = "black", size = 4) +
+    labs(x = "",y = "") +
+    theme_bw() +
+    theme(
+      #legend.title = element_blank(),
+      plot.title = element_text(hjust = 0.5, family = "serif", size = 20),
+      axis.text.x = element_text(angle=30,hjust=1,vjust=1.0, size = 20, family = "serif"),
+      axis.text.y = element_text(size = 20, family = "serif"))
+  print(plot)
+
+ #coord_flip()
+# Print the heatmap
+#print(ggheatmap)
+
+}
+
+
+
+
+```
+
+
+#lda boot
+```{r}
+i = 1
+
+lda_boot <- function(i, reps = 500, samples = 500){
+  #ind = inds(i)
+  #reps = 500
+  #samples  = 500
+  test = lda_data[(i[1]:i[2]),]
+  output_list_b = list()
+  mean_errors_b = numeric(reps)
+  mean_precision_b = numeric(reps)
+  mean_errors_b_month = matrix(0, reps, 12)
+  mean_precision_b_month = matrix(0, reps, 12)
+  for(i in 1:reps){
+    index = sample.int(length((ind[1]:ind[2])), samples, replace = T)
+    test_b = test[index,]
+    true_b = test_b$month
+    predicted_b = predict(lda_m, test_b)$class
+    mean_errors_b[i] = mean(error_sym(as.numeric(predicted_b), as.numeric(true_b)))
+    out_p = numeric(12)
+    out_precision = numeric(12)
+    for(j in 0:11){
+      out_p[j+1] = mean(error_sym(as.numeric(predicted_b[predicted_b == j+1]), as.numeric(true_b[predicted_b == j+1])))
+      out_precision[j+1] = mean(as.numeric(predicted_b[predicted_b == j+1]) == as.numeric(true_b[predicted_b == j+1]))
+    }
+    mean_precision_b[i] = mean(out_precision)
+    mean_precision_b_month[i,] = out_precision
+    mean_errors_b_month[i,] = out_p
+  }
+  
+  output_list_b$mean = mean(mean_errors_b, na.rm = T)
+  quantiles = quantile(mean_errors_b, probs = c(0.025, 0.975), na.rm = T, type = 8)
+  output_list_b$quantiles = quantiles
+  output_list_b$month_mean = colMeans(mean_errors_b_month, na.rm = T)
+  
+  output_list_b$precision_means = colMeans(mean_precision_b_month)
+  output_list_b$mean_precision = mean(mean_precision_b)
+  output_list_b$quant_mean_precision = quantile(mean_precision_b, probs = c(0.025, 0.975), na.rm = T, type = 8)
+  
+  quants_months = matrix(0, 12, 2)
+  quants_months_precision = matrix(0, 12, 2)
+  for(i in 1:12){
+    quants_months[i,] = quantile(mean_errors_b_month[,i], probs = c(0.025, 0.975), na.rm = T, type = 8)
+    quants_months_precision[i,] = quantile(mean_precision_b_month[,i], probs = c(0.025, 0.975), na.rm = T, type = 8)
+  }
+  output_list_b$quantiles_precision_months = quants_months_precision
+  output_list_b$quantils_months = quants_months
+  return(output_list_b)
+}
+
+
+
+
+```
+
+
+#average month error
+```{r}
+
+index_100 = seq(482, 1332, 100)
+index_100[9] = 1332
+year_index_100 =  1853 + (1/12 * index_100)
+
+inds = round(seq(0, 111, 111/8)[4:9] * 12)
+inds[1] = inds[1]+1
+
+#df = data.frame(time = 1:371, mean_err = mean_error_sym)
+error_means = numeric(6)
+error_precision = numeric(6)
+quant_error_means = matrix(0, 6, 2)
+quant_error_means_pr = matrix(0, 6, 2)
+month_list = list()
+month_list2 = list()
+for(j in 1:12){
+  month_list[[j]] = c(1,1,1)
+  month_list2[[j]] = c(1,1,1)
+}
+for(i in 1:6){
+  print(i)
+  #ind = index_100[i:(i+1)]
+  ind = c((inds[i]-500),inds[i])
+  result = lda_boot(ind, reps = 1000, samples = 300)
+  error_precision[i] = result$mean_precision
+  error_means[i] = result$mean
+  quant_error_means[i,] = result$quantiles
+  quant_error_means_pr[i,] = result$quant_mean_precision
+
+  for(j in 1:12){
+    month_list[[j]] = rbind(month_list[[j]],c(
+                            result$month_mean[j], 
+                            result$quantils_months[j,1],
+                            result$quantils_months[j,2]))
+    
+    month_list2[[j]] = rbind(month_list2[[j]],c(
+                            result$precision_means[j], 
+                            result$quantiles_precision_months[j,1],
+                            result$quantiles_precision_months[j,2]))
+  }
+}
+```
+
+#average precision error
+```{r}
+df = data.frame(
+                #time = 1:8,
+                time = round(1853 + ((inds-250) * 1/12)),
+                mean_err = error_means, 
+                quant_min = quant_error_means[,1],
+                quant_max = quant_error_means[,2])
+
+
+plot = ggplot(data=df, aes(x = time, y = mean_err)) +
+  geom_ribbon(aes(ymin=quant_min,ymax=quant_max),alpha=0.2) +
+  geom_line() +
+  geom_point(size = 4) +
+  ylim(c(0,0.5)) +
+  ylab("Symmetry error") +
+  xlab("Time") +
+  ggtitle("Average Symmetry error bootstrapped") +
+  #geom_errorbar(aes(ymin=quant_min, ymax=quant_max), width=1) +
+  
+  #theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, family = "serif", size = 15))
+  theme_bw()+
+  theme(axis.text.x = element_text(family = "serif", size = 25), 
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 20),
+        axis.text.y = element_text(family = "serif", size = 15),
+        #legend.position = "none", 
+        axis.title.x = element_text(family = "serif", size = 25), 
+        axis.title.y = element_text(family = "serif", size = 15),
+        legend.key.size = unit(2, 'cm'),
+        legend.title = element_text(family = "serif", size = 20),
+        legend.text = element_text(family = "serif", size = 20))
+  
+print(plot)
+```
+
+#Symmetry error per month
+```{r}
+for(j in 1:12){
+  df = data.frame(
+                #time = 1:8, 
+                #time = year_index_100[-9],
+                time = round(1853 + ((inds-250) * 1/12)),
+                mean_err = month_list[[j]][-1,1], 
+                quant_min = month_list[[j]][-1,2],
+                quant_max = month_list[[j]][-1,3])
+  
+  
+    plots = ggplot(data=df, aes(x = time, y = mean_err)) +
+    geom_ribbon(aes(ymin=quant_min,ymax=quant_max),alpha=0.2, col = palette[j]) +
+    geom_line() +
+    geom_point(col = palette[j], size = 4) +
+    ylim(c(0,1.3)) +
+    ylab("Symmetry error") +
+    xlab("Time") +
+    #geom_errorbar(aes(ymin=quant_min, ymax=quant_max), width=.3) +
+    theme_bw() +
+    ggtitle(paste("Symmetry error bootstrapped ", month_names[j], sep = "")) +
+    theme(axis.text.x = element_text(family = "serif", size = 25), 
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 20),
+        axis.text.y = element_text(family = "serif", size = 15),
+        legend.position = "none", 
+        axis.title.x = element_text(family = "serif", size = 25), 
+        axis.title.y = element_text(family = "serif", size = 15),
+        legend.key.size = unit(2, 'cm'),
+        legend.title = element_text(family = "serif", size = 20),
+        legend.text = element_text(family = "serif", size = 20))
+    
+  print(plots)
+  ggsave(filename = paste("sym_err_", month_names[j], ".pdf", sep = ""),
+         plot = last_plot(),
+         width = 12,
+         height = 8)
+
+
+}
+```
+
+#Precision
+```{r}
+df = data.frame(
+                #time = 1:8,
+                time = round(1853 + ((inds-250) * 1/12)),
+                mean_err = error_precision, 
+                quant_min = quant_error_means_pr[,1],
+                quant_max = quant_error_means_pr[,2])
+
+
+plot = ggplot(data=df, aes(x = time, y = mean_err)) +
+  geom_ribbon(aes(ymin=quant_min,ymax=quant_max),alpha=0.2) +
+  geom_line() +
+  geom_point(size = 4) +
+  ylim(c(0.75,1)) +
+  ylab("Precision") +
+  xlab("Time") +
+  ggtitle("Average Precision error bootstrapped") +
+  theme_bw() +
+  #geom_errorbar(aes(ymin=quant_min, ymax=quant_max), width=1) +
+  
+  #theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, family = "serif", size = 15)) 
+  theme(axis.text.x = element_text(family = "serif", size = 25), 
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 20),
+        axis.text.y = element_text(family = "serif", size = 15),
+        #legend.position = "none", 
+        axis.title.x = element_text(family = "serif", size = 25), 
+        axis.title.y = element_text(family = "serif", size = 15),
+        legend.key.size = unit(2, 'cm'),
+        legend.title = element_text(family = "serif", size = 20),
+        legend.text = element_text(family = "serif", size = 20))
+  
+print(plot)
+```
+
+#precision per month
+```{r}
+for(j in 1:12){
+  df = data.frame(
+                #time = 1:8, 
+                #time = year_index_100[-9],
+                time = round(1853 + ((inds-250) * 1/12)),
+                mean_err = month_list2[[j]][-1,1], 
+                quant_min = month_list2[[j]][-1,2],
+                quant_max = month_list2[[j]][-1,3])
+  
+  
+    plot = ggplot(data=df, aes(x = time, y = mean_err)) +
+    geom_ribbon(aes(ymin=quant_min,ymax=quant_max),alpha=0.2, col = palette[j]) +
+    geom_line() +
+    geom_point(col = palette[j], size = 4) +
+    ylim(c(0.25,1)) +
+    ylab("Precision error") +
+    xlab("Time") +
+    #geom_errorbar(aes(ymin=quant_min, ymax=quant_max), width=.3) +
+    theme_bw() +
+    ggtitle(paste("Precision bootstrapped ", month_names[j], sep = "")) +
+    theme(axis.text.x = element_text(family = "serif", size = 25), 
+        plot.title = element_text(hjust = 0.5, family = "serif", size = 20),
+        axis.text.y = element_text(family = "serif", size = 15),
+        legend.position = "none", 
+        axis.title.x = element_text(family = "serif", size = 25), 
+        axis.title.y = element_text(family = "serif", size = 15),
+        legend.key.size = unit(2, 'cm'),
+        legend.title = element_text(family = "serif", size = 20),
+        legend.text = element_text(family = "serif", size = 20))
+    
+  print(plot)
+  ggsave(filename = paste("precision_", month_names[j], ".pdf", sep = ""),
+         plot = last_plot(),
+         width = 12,
+         height = 8)
+}
+```
+
+
